@@ -47,6 +47,7 @@ import {
     groupLayers,
     layerWithActionsAtTime,
     moveLayer,
+    textAnimationSegmentsAtTime,
     updateAction,
     updateLayer,
 } from '@/lib/composition';
@@ -1485,6 +1486,8 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
                                         selected={selectedLayerIds.includes(
                                             layer.id,
                                         )}
+                                        actions={composition.actions}
+                                        currentTime={currentTime}
                                         onSelect={(additive) =>
                                             selectLayer(
                                                 layer.id,
@@ -1592,6 +1595,8 @@ function CanvasLayer({
     layer,
     canvasScale,
     selected,
+    actions,
+    currentTime,
     onSelect,
     onMove,
     onResize,
@@ -1601,6 +1606,8 @@ function CanvasLayer({
     layer: Layer;
     canvasScale: number;
     selected: boolean;
+    actions: AnimationAction[];
+    currentTime: number;
     onSelect: (additive: boolean) => void;
     onMove: (x: number, y: number) => void;
     onResize: (transform: Transform) => void;
@@ -1739,6 +1746,10 @@ function CanvasLayer({
         layer.type === 'text'
             ? 'items-start justify-start'
             : 'items-center justify-center';
+    const textAnimationSegments =
+        layer.type === 'text'
+            ? textAnimationSegmentsAtTime(layer, actions, currentTime)
+            : null;
 
     return (
         <div
@@ -1766,7 +1777,23 @@ function CanvasLayer({
                         textAlign: layer.textAlign,
                     }}
                 >
-                    {layer.content}
+                    {textAnimationSegments
+                        ? textAnimationSegments.map((segment) => (
+                              <span
+                                  key={segment.id}
+                                  style={{
+                                      display: segment.display,
+                                      opacity: segment.opacity,
+                                      transform: segment.transform,
+                                      transformOrigin: 'center',
+                                      whiteSpace: 'pre',
+                                      willChange: 'transform, opacity',
+                                  }}
+                              >
+                                  {segment.text}
+                              </span>
+                          ))
+                        : layer.content}
                 </div>
             )}
             {layer.type === 'rectangle' && (

@@ -12,6 +12,14 @@ import type {
 
 type ArtboardSize = Pick<Composition, 'width' | 'height'>;
 
+export interface TextAnimationSegment {
+    id: string;
+    text: string;
+    display: 'inline-block' | 'block';
+    opacity: number;
+    transform: string;
+}
+
 const defaultTransform: Transform = {
     x: 120,
     y: 120,
@@ -194,7 +202,11 @@ export function layerWithActionsAtTime(
 
             const eased = ease(progress, action.easing);
 
-            if (action.kind === 'typewriter' && layer.type === 'text') {
+            if (isTextUnitAction(layer, action)) {
+                if (action.kind !== 'typewriter') {
+                    return;
+                }
+
                 content = typewriterContentAtProgress(
                     layer.content ?? '',
                     action,
@@ -232,6 +244,76 @@ export function layerWithActionsAtTime(
     transform.blur = Math.max(0, transform.blur ?? 0);
 
     return { ...layer, content, fill, transform };
+}
+
+export function textAnimationSegmentsAtTime(
+    layer: Layer,
+    actions: AnimationAction[] = [],
+    timeMs: number,
+): TextAnimationSegment[] | null {
+    if (layer.type !== 'text' || !layer.content) {
+        return null;
+    }
+
+    const scopedActions = actions.filter(
+        (action) =>
+            isTextUnitAction(layer, action) &&
+            action.kind !== 'typewriter' &&
+            actionProgress(action, timeMs) !== null,
+    );
+
+    if (scopedActions.length === 0) {
+        return null;
+    }
+
+    const renderScope = scopedActions[0].scope ?? 'character';
+    const units = splitTextUnits(layer.content, renderScope);
+
+    return units.map((unit, index) => {
+        const motion = scopedActions.reduce(
+            (result, action) => {
+                const progress = actionProgress(action, timeMs);
+
+                if (progress === null) {
+                    return result;
+                }
+
+                const localProgress = textUnitProgress(
+                    action,
+                    timeMs,
+                    index,
+                    units.length,
+                );
+                const eased = ease(localProgress, action.easing);
+                const multiplier = actionMultiplier(
+                    action,
+                    localProgress,
+                    eased,
+                );
+
+                return applyTextUnitDelta(result, action.delta, multiplier);
+            },
+            {
+                x: 0,
+                y: 0,
+                scale: 1,
+                rotation: 0,
+                opacity: 1,
+            },
+        );
+
+        return {
+            id: `${layer.id}-text-${index}`,
+            text: unit,
+            display: renderScope === 'line' ? 'block' : 'inline-block',
+            opacity: Math.min(1, Math.max(0, motion.opacity)),
+            transform: [
+                `translate(${motion.x}px, ${motion.y}px)`,
+                `rotate(${motion.rotation}deg)`,
+                `scale(${Math.max(0.01, motion.scale)})`,
+            ].join(' '),
+        };
+    });
 }
 
 export function addPreset(
@@ -680,6 +762,64 @@ function actionMultiplier(
     }
 
     return Math.sin(progress * Math.PI);
+}
+
+function isTextUnitAction(layer: Layer, action: AnimationAction): boolean {
+    return (
+        layer.type === 'text' &&
+        Boolean(action.scope) &&
+        action.scope !== 'layer'
+    );
+}
+
+function textUnitProgress(
+    action: AnimationAction,
+    timeMs: number,
+    index: number,
+    unitCount: number,
+): number {
+    const staggerMs = action.staggerMs ?? 0;
+    const orderIndex =
+        action.order === 'reverse' ? unitCount - index - 1 : index;
+    const totalStaggerMs = staggerMs * Math.max(0, unitCount - 1);
+    const unitDurationMs = Math.max(1, action.durationMs - totalStaggerMs);
+    const elapsedMs = timeMs - action.startMs - orderIndex * staggerMs;
+
+    if (elapsedMs <= 0) {
+        return 0;
+    }
+
+    if (elapsedMs >= unitDurationMs) {
+        return 1;
+    }
+
+    return elapsedMs / unitDurationMs;
+}
+
+function applyTextUnitDelta(
+    motion: {
+        x: number;
+        y: number;
+        scale: number;
+        rotation: number;
+        opacity: number;
+    },
+    delta: Partial<Record<AnimatedProperty, number>>,
+    multiplier: number,
+): {
+    x: number;
+    y: number;
+    scale: number;
+    rotation: number;
+    opacity: number;
+} {
+    return {
+        x: motion.x + (delta.x ?? 0) * multiplier,
+        y: motion.y + (delta.y ?? 0) * multiplier,
+        scale: motion.scale + (delta.scale ?? 0) * multiplier,
+        rotation: motion.rotation + (delta.rotation ?? 0) * multiplier,
+        opacity: motion.opacity + (delta.opacity ?? 0) * multiplier,
+    };
 }
 
 function typewriterContentAtProgress(
