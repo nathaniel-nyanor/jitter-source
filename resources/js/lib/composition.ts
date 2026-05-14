@@ -181,6 +181,7 @@ export function layerWithActionsAtTime(
 ): Layer {
     const transform = { ...layer.transform };
     let fill = layer.fill;
+    let content = layer.content;
 
     actions
         .filter((action) => action.layerId === layer.id)
@@ -192,6 +193,17 @@ export function layerWithActionsAtTime(
             }
 
             const eased = ease(progress, action.easing);
+
+            if (action.kind === 'typewriter' && layer.type === 'text') {
+                content = typewriterContentAtProgress(
+                    layer.content ?? '',
+                    action,
+                    progress,
+                );
+
+                return;
+            }
+
             const multiplier = actionMultiplier(action, progress, eased);
 
             (
@@ -219,7 +231,7 @@ export function layerWithActionsAtTime(
     transform.height = Math.max(1, transform.height);
     transform.blur = Math.max(0, transform.blur ?? 0);
 
-    return { ...layer, fill, transform };
+    return { ...layer, content, fill, transform };
 }
 
 export function addPreset(
@@ -514,7 +526,7 @@ export function createAction(
         typewriter: {
             name: 'Typewriter',
             durationMs: 1200,
-            delta: { opacity: -1 },
+            delta: {},
             easing: 'linear',
             scope: 'character',
             staggerMs: 35,
@@ -668,6 +680,63 @@ function actionMultiplier(
     }
 
     return Math.sin(progress * Math.PI);
+}
+
+function typewriterContentAtProgress(
+    text: string,
+    action: AnimationAction,
+    progress: number,
+): string {
+    if (progress <= 0) {
+        return '';
+    }
+
+    if (progress >= 1) {
+        return text;
+    }
+
+    const units = splitTextUnits(text, action.scope ?? 'character');
+
+    if (units.length === 0) {
+        return '';
+    }
+
+    const visibleUnitCount =
+        action.staggerMs && action.staggerMs > 0
+            ? Math.min(
+                  units.length,
+                  Math.ceil((progress * action.durationMs) / action.staggerMs),
+              )
+            : Math.floor(progress * units.length);
+
+    if (visibleUnitCount <= 0) {
+        return '';
+    }
+
+    if (action.order === 'reverse') {
+        return units.slice(units.length - visibleUnitCount).join('');
+    }
+
+    return units.slice(0, visibleUnitCount).join('');
+}
+
+function splitTextUnits(
+    text: string,
+    scope: NonNullable<AnimationAction['scope']>,
+): string[] {
+    if (scope === 'layer') {
+        return [text];
+    }
+
+    if (scope === 'line') {
+        return text.match(/[^\n]*\n?|$/g)?.filter(Boolean) ?? [];
+    }
+
+    if (scope === 'word') {
+        return text.match(/\S+\s*|\s+/g) ?? [];
+    }
+
+    return Array.from(text);
 }
 
 function colorProgress(
