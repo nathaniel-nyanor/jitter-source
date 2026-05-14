@@ -2068,23 +2068,31 @@ function Timeline({
                             max: startEndMs - 50,
                         }),
                     );
+                    const nextDurationMs = Math.max(50, startEndMs - nextStart);
 
-                    return {
-                        ...item,
-                        startMs: nextStart,
-                        durationMs: Math.max(50, startEndMs - nextStart),
-                    };
+                    return resizeActionToDuration(
+                        {
+                            ...item,
+                            startMs: nextStart,
+                            staggerMs: action.staggerMs,
+                        },
+                        nextDurationMs,
+                        startDurationMs,
+                    );
                 }
 
-                return {
-                    ...item,
-                    durationMs: Math.round(
-                        clampNumber(startDurationMs + deltaMs, {
-                            min: 50,
-                            max: duration - startMs,
-                        }),
-                    ),
-                };
+                const nextDurationMs = Math.round(
+                    clampNumber(startDurationMs + deltaMs, {
+                        min: 50,
+                        max: duration - startMs,
+                    }),
+                );
+
+                return resizeActionToDuration(
+                    { ...item, staggerMs: action.staggerMs },
+                    nextDurationMs,
+                    startDurationMs,
+                );
             });
         }
 
@@ -2218,7 +2226,8 @@ function Timeline({
                                         }}
                                     >
                                         <span
-                                            className="absolute inset-y-0 left-0 w-2 cursor-ew-resize rounded-l bg-black/15"
+                                            aria-hidden="true"
+                                            className="absolute inset-y-0 left-0 w-3 cursor-ew-resize rounded-l border-r border-white/35 bg-white/25 transition hover:bg-white/45"
                                             onPointerDown={(event) =>
                                                 startActionInteraction(
                                                     event,
@@ -2229,7 +2238,8 @@ function Timeline({
                                         />
                                         {action.name}
                                         <span
-                                            className="absolute inset-y-0 right-0 w-2 cursor-ew-resize rounded-r bg-black/15"
+                                            aria-hidden="true"
+                                            className="absolute inset-y-0 right-0 w-3 cursor-ew-resize rounded-r border-l border-white/35 bg-white/25 transition hover:bg-white/45"
                                             onPointerDown={(event) =>
                                                 startActionInteraction(
                                                     event,
@@ -2854,26 +2864,29 @@ function Inspector({
                                 <Input
                                     type="number"
                                     value={selectedAction.durationMs}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                        const nextDurationMs = numberFromInput(
+                                            event.target.value,
+                                            selectedAction.durationMs,
+                                            {
+                                                min: 50,
+                                                max: Math.max(
+                                                    50,
+                                                    composition.durationMs -
+                                                        selectedAction.startMs,
+                                                ),
+                                            },
+                                        );
+
                                         onActionChange(
                                             selectedAction.id,
-                                            (action) => ({
-                                                ...action,
-                                                durationMs: numberFromInput(
-                                                    event.target.value,
-                                                    action.durationMs,
-                                                    {
-                                                        min: 50,
-                                                        max: Math.max(
-                                                            50,
-                                                            composition.durationMs -
-                                                                action.startMs,
-                                                        ),
-                                                    },
+                                            (action) =>
+                                                resizeActionToDuration(
+                                                    action,
+                                                    nextDurationMs,
                                                 ),
-                                            }),
-                                        )
-                                    }
+                                        );
+                                    }}
                                 />
                             </Field>
                         </div>
@@ -3528,16 +3541,50 @@ function clampActionToDuration(
         durationMs - startMs,
     );
 
-    return {
-        ...action,
-        startMs,
-        durationMs: Math.round(
+    return resizeActionToDuration(
+        {
+            ...action,
+            startMs,
+        },
+        Math.round(
             clampNumber(action.durationMs, {
                 min: minimumActionDurationMs,
                 max: durationLimit,
             }),
         ),
+    );
+}
+
+function resizeActionToDuration(
+    action: AnimationAction,
+    durationMs: number,
+    baseDurationMs = action.durationMs,
+): AnimationAction {
+    const nextDurationMs = Math.round(Math.max(50, durationMs));
+
+    return {
+        ...action,
+        durationMs: nextDurationMs,
+        staggerMs: scaledActionStagger(action, nextDurationMs, baseDurationMs),
     };
+}
+
+function scaledActionStagger(
+    action: AnimationAction,
+    durationMs: number,
+    baseDurationMs: number,
+): number {
+    if (
+        !action.staggerMs ||
+        action.staggerMs <= 0 ||
+        !action.scope ||
+        action.scope === 'layer' ||
+        baseDurationMs <= 0
+    ) {
+        return action.staggerMs ?? 0;
+    }
+
+    return Math.round(action.staggerMs * (durationMs / baseDurationMs));
 }
 
 function transformNumberBounds(property: keyof Transform): {

@@ -611,7 +611,7 @@ export function createAction(
             delta: {},
             easing: 'linear',
             scope: 'character',
-            staggerMs: 35,
+            staggerMs: 0,
         },
         drop: {
             name: actionName('Drop', phase),
@@ -841,13 +841,10 @@ function typewriterContentAtProgress(
         return '';
     }
 
-    const visibleUnitCount =
-        action.staggerMs && action.staggerMs > 0
-            ? Math.min(
-                  units.length,
-                  Math.ceil((progress * action.durationMs) / action.staggerMs),
-              )
-            : Math.floor(progress * units.length);
+    const visibleUnitCount = Math.min(
+        units.length,
+        Math.ceil(progress * units.length),
+    );
 
     if (visibleUnitCount <= 0) {
         return '';
