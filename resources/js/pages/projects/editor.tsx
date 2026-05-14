@@ -1927,14 +1927,14 @@ function Timeline({
                     {ticks.map((tick) => (
                         <span
                             key={tick.timeMs}
-                            className="absolute top-2 -translate-x-1/2 tabular-nums"
+                            className="absolute top-2 z-10 -translate-x-1/2 tabular-nums"
                             style={{ left: tick.left }}
                         >
                             {(tick.timeMs / 1000).toFixed(1)}s
                         </span>
                     ))}
                     <span
-                        className="absolute top-0 h-full w-px bg-primary"
+                        className="pointer-events-none absolute top-0 z-40 h-full w-[3px] -translate-x-1/2 rounded-full bg-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.9),0_0_14px_rgba(0,0,0,0.45)]"
                         style={{ left: playheadLeft }}
                     />
                     <button
@@ -1965,7 +1965,7 @@ function Timeline({
                         >
                             <div className="h-6 rounded bg-muted" />
                             <span
-                                className="pointer-events-none absolute top-0 h-full w-px bg-primary/80"
+                                className="pointer-events-none absolute top-0 z-40 h-full w-[3px] -translate-x-1/2 rounded-full bg-foreground shadow-[0_0_0_1px_rgba(255,255,255,0.9),0_0_14px_rgba(0,0,0,0.45)]"
                                 style={{ left: playheadLeft }}
                             />
                             {composition.actions
@@ -1993,7 +1993,7 @@ function Timeline({
                                                 'move',
                                             )
                                         }
-                                        className={`absolute top-2 h-6 min-w-10 overflow-hidden rounded px-2 text-left text-xs leading-6 text-white shadow-sm transition ${
+                                        className={`absolute top-2 z-20 h-6 min-w-10 overflow-hidden rounded px-2 text-left text-xs leading-6 text-white shadow-sm transition ${
                                             action.phase === 'out'
                                                 ? 'bg-rose-500'
                                                 : action.phase === 'custom'
