@@ -14,6 +14,7 @@ import {
     Lock,
     Pause,
     Play,
+    Plus,
     Redo2,
     Save,
     Square,
@@ -96,6 +97,8 @@ type LegacyComposition = Omit<Composition, 'actions'> & {
     actions?: AnimationAction[];
     tracks?: unknown[];
 };
+
+type PresetApplyMode = 'replace' | 'append';
 
 function normalizeComposition(composition: LegacyComposition): Composition {
     const durationMs = clampNumber(composition.durationMs, {
@@ -569,28 +572,85 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     function applyPreset(
         preset: AnimationActionKind,
         phase: AnimationActionPhase = 'in',
+        mode: PresetApplyMode = 'replace',
     ) {
         if (!selectedLayerId) {
             return;
         }
 
-        const action = clampActionToDuration(
+        const nextAction = clampActionToDuration(
             createAction(selectedLayerId, preset, phase),
             composition.durationMs,
         );
+        const selectedAction = composition.actions.find(
+            (item) =>
+                item.id === selectedActionId &&
+                item.layerId === selectedLayerId,
+        );
+        const layerActions = composition.actions.filter(
+            (item) => item.layerId === selectedLayerId,
+        );
+        const phaseAction = composition.actions.find(
+            (item) => item.layerId === selectedLayerId && item.phase === phase,
+        );
+        const actionToReplace =
+            mode === 'replace'
+                ? (selectedAction ??
+                  phaseAction ??
+                  (layerActions.length === 1 ? layerActions[0] : undefined))
+                : undefined;
+
+        if (actionToReplace) {
+            const replacementAction = clampActionToDuration(
+                {
+                    ...nextAction,
+                    id: actionToReplace.id,
+                    layerId: actionToReplace.layerId,
+                    startMs: actionToReplace.startMs,
+                    durationMs: actionToReplace.durationMs,
+                    scope: actionToReplace.scope ?? nextAction.scope,
+                    order: actionToReplace.order ?? nextAction.order,
+                    staggerMs:
+                        actionToReplace.staggerMs ?? nextAction.staggerMs,
+                    smoothing:
+                        actionToReplace.smoothing ?? nextAction.smoothing,
+                },
+                composition.durationMs,
+            );
+
+            logEditorEvent('animation.action.replaced', {
+                layerId: selectedLayerId,
+                actionId: actionToReplace.id,
+                previousPreset: actionToReplace.kind,
+                nextPreset: preset,
+                phase,
+            });
+
+            commitComposition((current) =>
+                updateAction(
+                    current,
+                    actionToReplace.id,
+                    () => replacementAction,
+                ),
+            );
+            setSelectedActionId(replacementAction.id);
+
+            return;
+        }
 
         logEditorEvent('animation.action.added', {
             layerId: selectedLayerId,
-            actionId: action.id,
+            actionId: nextAction.id,
             preset,
             phase,
+            mode,
         });
 
         commitComposition((current) => ({
             ...current,
-            actions: [...current.actions, action],
+            actions: [...current.actions, nextAction],
         }));
-        setSelectedActionId(action.id);
+        setSelectedActionId(nextAction.id);
     }
 
     function patchAction(
@@ -2051,6 +2111,7 @@ function Inspector({
     onPreset: (
         preset: AnimationActionKind,
         phase?: AnimationActionPhase,
+        mode?: PresetApplyMode,
     ) => void;
     onImageUpload: (file: File) => void;
     imageUploadError: string | null;
@@ -2303,16 +2364,44 @@ function Inspector({
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                 {group.presets.map((preset) => (
-                                    <Button
+                                    <div
                                         key={`${group.phase}-${preset.kind}`}
-                                        type="button"
-                                        variant="outline"
-                                        onClick={() =>
-                                            onPreset(preset.kind, group.phase)
-                                        }
+                                        className="flex min-w-0 overflow-hidden rounded-md border bg-background shadow-xs"
                                     >
-                                        {preset.label}
-                                    </Button>
+                                        <button
+                                            type="button"
+                                            title="Replace current action"
+                                            onClick={(event) =>
+                                                onPreset(
+                                                    preset.kind,
+                                                    group.phase,
+                                                    event.altKey ||
+                                                        event.metaKey ||
+                                                        event.ctrlKey
+                                                        ? 'append'
+                                                        : 'replace',
+                                                )
+                                            }
+                                            className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm font-medium transition hover:bg-accent"
+                                        >
+                                            {preset.label}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            title="Add as stacked action"
+                                            aria-label={`Add ${preset.label} as stacked action`}
+                                            onClick={() =>
+                                                onPreset(
+                                                    preset.kind,
+                                                    group.phase,
+                                                    'append',
+                                                )
+                                            }
+                                            className="grid w-9 shrink-0 place-items-center border-l text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                                        >
+                                            <Plus className="size-3.5" />
+                                        </button>
+                                    </div>
                                 ))}
                             </div>
                         </div>
