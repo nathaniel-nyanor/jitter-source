@@ -10,6 +10,8 @@ import type {
     Transform,
 } from '@/types';
 
+type ArtboardSize = Pick<Composition, 'width' | 'height'>;
+
 const defaultTransform: Transform = {
     x: 120,
     y: 120,
@@ -21,12 +23,40 @@ const defaultTransform: Transform = {
     blur: 0,
 };
 
-export function createLayer(type: LayerType, index: number): Layer {
+export function createLayer(
+    type: LayerType,
+    index: number,
+    artboard?: ArtboardSize,
+): Layer {
     const id = makeId('layer');
+    const scale = artboard
+        ? Math.min(
+              1,
+              Math.max(
+                  0.3,
+                  Math.min(artboard.width / 1080, artboard.height / 1080),
+              ),
+          )
+        : 1;
+    const offset = Math.round(28 * index * scale);
+    const originX = artboard
+        ? Math.round(Math.max(16, artboard.width * 0.08))
+        : 120;
+    const originY = artboard
+        ? Math.round(Math.max(16, artboard.height * 0.08))
+        : 120;
+    const width = Math.round(
+        Math.max(48, Math.min(320, (artboard?.width ?? 1080) * 0.28)),
+    );
+    const height = Math.round(
+        Math.max(32, Math.min(180, (artboard?.height ?? 1080) * 0.16)),
+    );
     const baseTransform = {
         ...defaultTransform,
-        x: 120 + index * 28,
-        y: 120 + index * 28,
+        x: originX + offset,
+        y: originY + offset,
+        width,
+        height,
     };
 
     if (type === 'text') {
@@ -36,9 +66,29 @@ export function createLayer(type: LayerType, index: number): Layer {
             name: `Text ${index}`,
             content: 'New text',
             fill: '#111827',
-            fontSize: 64,
+            fontFamily: 'Inter, Instrument Sans, sans-serif',
+            fontSize: Math.round(
+                Math.max(18, Math.min(64, (artboard?.width ?? 1080) * 0.06)),
+            ),
             fontWeight: 700,
-            transform: { ...baseTransform, height: 92 },
+            lineHeight: 1.1,
+            letterSpacing: 0,
+            textAlign: 'left',
+            transform: {
+                ...baseTransform,
+                width: Math.round(
+                    Math.max(
+                        120,
+                        Math.min(420, (artboard?.width ?? 1080) * 0.46),
+                    ),
+                ),
+                height: Math.round(
+                    Math.max(
+                        28,
+                        Math.min(92, (artboard?.height ?? 1080) * 0.1),
+                    ),
+                ),
+            },
             hidden: false,
             locked: false,
         };
@@ -51,6 +101,7 @@ export function createLayer(type: LayerType, index: number): Layer {
             name: `Image ${index}`,
             content: '',
             fill: '#dbeafe',
+            cornerRadius: 0,
             transform: baseTransform,
             hidden: false,
             locked: false,
@@ -63,7 +114,22 @@ export function createLayer(type: LayerType, index: number): Layer {
             type,
             name: `Frame ${index}`,
             fill: '#ffffff00',
-            transform: { ...baseTransform, width: 420, height: 280 },
+            cornerRadius: 0,
+            transform: {
+                ...baseTransform,
+                width: Math.round(
+                    Math.max(
+                        80,
+                        Math.min(420, (artboard?.width ?? 1080) * 0.38),
+                    ),
+                ),
+                height: Math.round(
+                    Math.max(
+                        60,
+                        Math.min(280, (artboard?.height ?? 1080) * 0.28),
+                    ),
+                ),
+            },
             hidden: false,
             locked: false,
         };
@@ -75,7 +141,22 @@ export function createLayer(type: LayerType, index: number): Layer {
             type,
             name: `Group ${index}`,
             fill: '#ffffff00',
-            transform: { ...baseTransform, width: 360, height: 240 },
+            cornerRadius: 0,
+            transform: {
+                ...baseTransform,
+                width: Math.round(
+                    Math.max(
+                        80,
+                        Math.min(360, (artboard?.width ?? 1080) * 0.34),
+                    ),
+                ),
+                height: Math.round(
+                    Math.max(
+                        60,
+                        Math.min(240, (artboard?.height ?? 1080) * 0.24),
+                    ),
+                ),
+            },
             hidden: false,
             locked: false,
         };
@@ -86,6 +167,7 @@ export function createLayer(type: LayerType, index: number): Layer {
         type,
         name: type === 'ellipse' ? `Ellipse ${index}` : `Rectangle ${index}`,
         fill: type === 'ellipse' ? '#2563eb' : '#16a34a',
+        cornerRadius: 0,
         transform: baseTransform,
         hidden: false,
         locked: false,
@@ -260,24 +342,51 @@ export function groupLayer(
     composition: Composition,
     layerId: string,
 ): { composition: Composition; layerId: string } {
-    const layer = composition.layers.find((item) => item.id === layerId);
+    return groupLayers(composition, [layerId]);
+}
 
-    if (!layer || layer.type === 'group') {
-        return { composition, layerId };
+export function groupLayers(
+    composition: Composition,
+    layerIds: string[],
+): { composition: Composition; layerId: string } {
+    const selectedIds = new Set(layerIds);
+    const selectedLayers = composition.layers.filter(
+        (item) => selectedIds.has(item.id) && item.type !== 'group',
+    );
+    const groupableIds = new Set(selectedLayers.map((layer) => layer.id));
+
+    if (selectedLayers.length === 0) {
+        return { composition, layerId: layerIds[0] ?? '' };
     }
 
     const groupId = makeId('layer');
     const padding = 32;
+    const minX = Math.min(...selectedLayers.map((layer) => layer.transform.x));
+    const minY = Math.min(...selectedLayers.map((layer) => layer.transform.y));
+    const maxX = Math.max(
+        ...selectedLayers.map(
+            (layer) => layer.transform.x + layer.transform.width,
+        ),
+    );
+    const maxY = Math.max(
+        ...selectedLayers.map(
+            (layer) => layer.transform.y + layer.transform.height,
+        ),
+    );
     const group: Layer = {
         id: groupId,
         type: 'group',
-        name: `${layer.name} Group`,
+        name:
+            selectedLayers.length === 1
+                ? `${selectedLayers[0].name} Group`
+                : `Group ${selectedLayers.length}`,
         fill: '#ffffff00',
+        cornerRadius: 0,
         transform: {
-            x: layer.transform.x - padding,
-            y: layer.transform.y - padding,
-            width: layer.transform.width + padding * 2,
-            height: layer.transform.height + padding * 2,
+            x: minX - padding,
+            y: minY - padding,
+            width: maxX - minX + padding * 2,
+            height: maxY - minY + padding * 2,
             rotation: 0,
             scale: 1,
             opacity: 1,
@@ -287,7 +396,9 @@ export function groupLayer(
         locked: false,
     };
 
-    const index = composition.layers.findIndex((item) => item.id === layerId);
+    const index = composition.layers.findIndex((item) =>
+        selectedIds.has(item.id),
+    );
     const layers = [...composition.layers];
     layers.splice(index, 0, group);
 
@@ -296,7 +407,9 @@ export function groupLayer(
         composition: {
             ...composition,
             layers: layers.map((item) =>
-                item.id === layerId ? { ...item, parentId: groupId } : item,
+                groupableIds.has(item.id)
+                    ? { ...item, parentId: groupId }
+                    : item,
             ),
         },
     };
@@ -338,6 +451,9 @@ export function createAction(
             delta: Partial<Record<AnimatedProperty, number>>;
             easing: Easing;
             color?: string;
+            scope?: AnimationAction['scope'];
+            order?: AnimationAction['order'];
+            staggerMs?: number;
         }
     > = {
         fade: {
@@ -394,6 +510,39 @@ export function createAction(
             durationMs: 800,
             delta: { width: 120, height: 80 },
             easing: 'ease-out',
+        },
+        typewriter: {
+            name: 'Typewriter',
+            durationMs: 1200,
+            delta: { opacity: -1 },
+            easing: 'linear',
+            scope: 'character',
+            staggerMs: 35,
+        },
+        drop: {
+            name: actionName('Drop', phase),
+            durationMs: 900,
+            delta: { y: -72, opacity: -1 },
+            easing: 'ease-out',
+            scope: 'word',
+            staggerMs: 45,
+        },
+        flip: {
+            name: actionName('Flip', phase),
+            durationMs: 900,
+            delta: { rotation: -90, opacity: -1 },
+            easing: 'ease-out',
+            scope: 'character',
+            staggerMs: 30,
+        },
+        explode: {
+            name: actionName('Explode', phase),
+            durationMs: 1100,
+            delta: { x: 90, y: -60, rotation: 18, opacity: -1 },
+            easing: 'ease-out',
+            scope: 'character',
+            order: 'reverse',
+            staggerMs: 28,
         },
         pop: {
             name: 'Pop',
@@ -463,9 +612,9 @@ export function createAction(
         easing: preset.easing,
         delta: preset.delta,
         color: preset.color,
-        scope: 'layer',
-        order: 'forward',
-        staggerMs: 0,
+        scope: preset.scope ?? 'layer',
+        order: preset.order ?? 'forward',
+        staggerMs: preset.staggerMs ?? 0,
         smoothing: 'ease-out',
     };
 }

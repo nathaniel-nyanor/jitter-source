@@ -30,6 +30,10 @@ export type AnimationActionKind =
     | 'color'
     | 'blur'
     | 'resize'
+    | 'typewriter'
+    | 'drop'
+    | 'flip'
+    | 'explode'
     | 'pop'
     | 'spin'
     | 'float'
@@ -59,6 +63,11 @@ export interface Layer {
     fill: string;
     fontSize?: number;
     fontWeight?: number;
+    fontFamily?: string;
+    lineHeight?: number;
+    letterSpacing?: number;
+    textAlign?: 'left' | 'center' | 'right';
+    cornerRadius?: number;
     parentId?: string;
     transform: Transform;
     hidden: boolean;

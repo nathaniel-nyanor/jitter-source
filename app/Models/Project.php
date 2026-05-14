@@ -108,7 +108,8 @@ class Project extends Model
         int $height = 1080,
     ): array {
         $titleWidth = min(720, max(240, $width - 160));
-        $titleHeight = 100;
+        $titleFontSize = min(72, max(28, (int) round($width * 0.05)));
+        $titleHeight = max(40, (int) round($titleFontSize * 1.4));
 
         return [
             'version' => '0.1.0',
@@ -124,8 +125,12 @@ class Project extends Model
                     'name' => 'Title',
                     'content' => 'Motion starts here',
                     'fill' => '#111827',
-                    'fontSize' => 72,
+                    'fontFamily' => 'Inter, Instrument Sans, sans-serif',
+                    'fontSize' => $titleFontSize,
                     'fontWeight' => 700,
+                    'lineHeight' => 1.1,
+                    'letterSpacing' => 0,
+                    'textAlign' => 'left',
                     'transform' => [
                         'x' => max(40, (int) (($width - $titleWidth) / 2)),
                         'y' => max(40, (int) (($height - $titleHeight) / 2)),

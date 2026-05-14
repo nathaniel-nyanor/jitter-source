@@ -44,7 +44,7 @@ import {
     deleteLayer,
     deleteAction,
     duplicateLayer,
-    groupLayer,
+    groupLayers,
     layerWithActionsAtTime,
     moveLayer,
     updateAction,
@@ -111,6 +111,23 @@ function normalizeComposition(composition: LegacyComposition): Composition {
         durationMs,
         layers: composition.layers.map((layer) => ({
             ...layer,
+            cornerRadius: layer.cornerRadius ?? 0,
+            fontFamily:
+                layer.type === 'text'
+                    ? (layer.fontFamily ?? 'Inter, Instrument Sans, sans-serif')
+                    : layer.fontFamily,
+            lineHeight:
+                layer.type === 'text'
+                    ? (layer.lineHeight ?? 1.1)
+                    : layer.lineHeight,
+            letterSpacing:
+                layer.type === 'text'
+                    ? (layer.letterSpacing ?? 0)
+                    : layer.letterSpacing,
+            textAlign:
+                layer.type === 'text'
+                    ? (layer.textAlign ?? 'left')
+                    : layer.textAlign,
             transform: {
                 ...layer.transform,
                 blur: layer.transform.blur ?? 0,
@@ -138,6 +155,11 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     const [selectedLayerId, setSelectedLayerId] = useState(
         initialComposition.layers[0]?.id ?? '',
     );
+    const [selectedLayerIds, setSelectedLayerIds] = useState(
+        initialComposition.layers[0]?.id
+            ? [initialComposition.layers[0].id]
+            : [],
+    );
     const [selectedActionId, setSelectedActionId] = useState(
         initialComposition.actions[0]?.id ?? '',
     );
@@ -158,6 +180,8 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     const playStartTime = useRef(0);
     const interactionStartComposition = useRef<Composition | null>(null);
     const compositionRef = useRef(composition);
+    const canvasViewportRef = useRef<HTMLDivElement | null>(null);
+    const hasManualCanvasZoom = useRef(false);
 
     const selectedLayer = composition.layers.find(
         (layer) => layer.id === selectedLayerId,
@@ -203,6 +227,22 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
         currentTimeRef.current = composition.durationMs;
         setCurrentTime(composition.durationMs);
     }, [composition.durationMs]);
+
+    useEffect(() => {
+        const viewport = canvasViewportRef.current;
+
+        if (!viewport || hasManualCanvasZoom.current) {
+            return;
+        }
+
+        fitCanvasToViewport();
+        const observer = new ResizeObserver(() => fitCanvasToViewport());
+        observer.observe(viewport);
+
+        return () => observer.disconnect();
+        // Re-fit only while zoom is still automatic.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [composition.width, composition.height]);
 
     useEffect(() => {
         if (!isPlaying) {
@@ -262,6 +302,9 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
 
         if (nextSelectedLayerId !== undefined) {
             setSelectedLayerId(nextSelectedLayerId);
+            setSelectedLayerIds(
+                nextSelectedLayerId ? [nextSelectedLayerId] : [],
+            );
         }
     }
 
@@ -311,6 +354,9 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
             );
             setComposition(previous);
             setSelectedLayerId(previous.layers[0]?.id ?? '');
+            setSelectedLayerIds(
+                previous.layers[0]?.id ? [previous.layers[0].id] : [],
+            );
 
             return history.slice(0, -1);
         });
@@ -330,13 +376,17 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
             ]);
             setComposition(next);
             setSelectedLayerId(next.layers[0]?.id ?? '');
+            setSelectedLayerIds(next.layers[0]?.id ? [next.layers[0].id] : []);
 
             return items.slice(1);
         });
     }
 
     function addLayer(type: LayerType) {
-        const layer = createLayer(type, composition.layers.length + 1);
+        const layer = createLayer(type, composition.layers.length + 1, {
+            width: composition.width,
+            height: composition.height,
+        });
 
         logEditorEvent('layer.add.requested', {
             type,
@@ -367,17 +417,49 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     }
 
     function groupSelectedLayer() {
-        logEditorEvent('layer.group.requested', { selectedLayerId });
+        logEditorEvent('layer.group.requested', {
+            selectedLayerId,
+            selectedLayerIds,
+        });
 
-        if (!selectedLayerId) {
+        if (selectedLayerIds.length === 0) {
             addLayer('group');
 
             return;
         }
 
-        const result = groupLayer(composition, selectedLayerId);
+        const result = groupLayers(composition, selectedLayerIds);
 
         commitComposition(() => result.composition, result.layerId);
+    }
+
+    function ungroupSelectedLayers() {
+        const selectedIds = new Set(selectedLayerIds);
+        const groupIds = composition.layers
+            .filter(
+                (layer) => selectedIds.has(layer.id) && layer.type === 'group',
+            )
+            .map((layer) => layer.id);
+
+        if (groupIds.length === 0) {
+            return;
+        }
+
+        logEditorEvent('layer.ungroup.requested', { groupIds });
+
+        commitComposition(
+            (current) => ({
+                ...current,
+                layers: current.layers
+                    .filter((layer) => !groupIds.includes(layer.id))
+                    .map((layer) =>
+                        layer.parentId && groupIds.includes(layer.parentId)
+                            ? { ...layer, parentId: undefined }
+                            : layer,
+                    ),
+            }),
+            '',
+        );
     }
 
     function patchSelected(updater: (layer: Layer) => Layer) {
@@ -538,17 +620,31 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
 
         const deltaX = x - source.transform.x;
         const deltaY = y - source.transform.y;
+        const moveSelectedSet =
+            selectedLayerIds.length > 1 && selectedLayerIds.includes(layerId)
+                ? new Set(selectedLayerIds)
+                : null;
 
         return {
             ...current,
             layers: current.layers.map((layer) => {
-                if (layer.id === layerId) {
+                if (layer.id === layerId || moveSelectedSet?.has(layer.id)) {
                     return {
                         ...layer,
                         transform: {
                             ...layer.transform,
-                            x,
-                            y,
+                            x:
+                                layer.id === layerId
+                                    ? roundCanvasNumber(x)
+                                    : roundCanvasNumber(
+                                          layer.transform.x + deltaX,
+                                      ),
+                            y:
+                                layer.id === layerId
+                                    ? roundCanvasNumber(y)
+                                    : roundCanvasNumber(
+                                          layer.transform.y + deltaY,
+                                      ),
                         },
                     };
                 }
@@ -558,8 +654,8 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
                         ...layer,
                         transform: {
                             ...layer.transform,
-                            x: layer.transform.x + deltaX,
-                            y: layer.transform.y + deltaY,
+                            x: roundCanvasNumber(layer.transform.x + deltaX),
+                            y: roundCanvasNumber(layer.transform.y + deltaY),
                         },
                     };
                 }
@@ -800,11 +896,11 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     }
 
     function deleteSelectedLayer() {
-        if (!selectedLayerId || isPlaying) {
+        if (selectedLayerIds.length === 0 || isPlaying) {
             return;
         }
 
-        logEditorEvent('layer.delete.requested', { selectedLayerId });
+        logEditorEvent('layer.delete.requested', { selectedLayerIds });
 
         const selectedIndex = composition.layers.findIndex(
             (layer) => layer.id === selectedLayerId,
@@ -814,10 +910,13 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
             composition.layers[selectedIndex + 1]?.id ??
             '';
 
-        commitComposition(
-            (current) => deleteLayer(current, selectedLayerId),
-            nextLayerId,
-        );
+        commitComposition((current) => {
+            return selectedLayerIds.reduce(
+                (nextComposition, layerId) =>
+                    deleteLayer(nextComposition, layerId),
+                current,
+            );
+        }, nextLayerId);
     }
 
     function exportEditorLogs() {
@@ -889,6 +988,7 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
     function handleCanvasWheel(event: ReactWheelEvent<HTMLDivElement>) {
         if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
+            hasManualCanvasZoom.current = true;
             const nextScale = clampNumber(
                 canvasScale * (event.deltaY > 0 ? 0.9 : 1.1),
                 { min: minCanvasScale, max: maxCanvasScale },
@@ -918,38 +1018,76 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
         }
     }
 
-    function resetCanvasZoom() {
-        setCanvasScale(defaultCanvasScale);
-        logEditorEvent('viewport.zoom.reset', {
-            nextScale: defaultCanvasScale,
+    function fitCanvasToViewport() {
+        const viewport = canvasViewportRef.current;
+
+        if (!viewport) {
+            return;
+        }
+
+        const horizontalPadding = 96;
+        const verticalPadding = 96;
+        const fitScale = Math.min(
+            (viewport.clientWidth - horizontalPadding) / composition.width,
+            (viewport.clientHeight - verticalPadding) / composition.height,
+        );
+        const nextScale = clampNumber(fitScale, {
+            min: minCanvasScale,
+            max: 1,
+        });
+
+        setCanvasScale(nextScale);
+        logEditorEvent('viewport.zoom.fit', {
+            nextScale,
+            width: composition.width,
+            height: composition.height,
         });
     }
 
-    function selectLayer(layerId: string, source: string) {
-        setSelectedLayerId(layerId);
+    function resetCanvasZoom() {
+        hasManualCanvasZoom.current = false;
+        fitCanvasToViewport();
+        logEditorEvent('viewport.zoom.reset', {
+            mode: 'fit',
+        });
+    }
+
+    function selectLayer(layerId: string, source: string, additive = false) {
+        const nextLayerIds = additive
+            ? selectedLayerIds.includes(layerId)
+                ? selectedLayerIds.filter((item) => item !== layerId)
+                : [...selectedLayerIds, layerId]
+            : [layerId];
+
+        setSelectedLayerIds(nextLayerIds);
+        setSelectedLayerId(nextLayerIds.at(-1) ?? '');
         setSelectedActionId('');
         logEditorEvent('selection.changed', {
             source,
             previousLayerId: selectedLayerId,
             nextLayerId: layerId,
+            nextLayerIds,
+            additive,
         });
     }
 
     function clearSelection(source: string) {
-        if (!selectedLayerId) {
+        if (selectedLayerIds.length === 0) {
             return;
         }
 
         setSelectedLayerId('');
+        setSelectedLayerIds([]);
         setSelectedActionId('');
         logEditorEvent('selection.cleared', {
             source,
-            previousLayerId: selectedLayerId,
+            previousLayerIds: selectedLayerIds,
         });
     }
 
     function selectAction(actionId: string, layerId: string, source: string) {
         setSelectedLayerId(layerId);
+        setSelectedLayerIds([layerId]);
         setSelectedActionId(actionId);
         logEditorEvent('animation.action.selected', {
             source,
@@ -1004,6 +1142,20 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
             if (modifier && event.key.toLowerCase() === 'v') {
                 event.preventDefault();
                 pasteCopiedActions();
+
+                return;
+            }
+
+            if (modifier && event.key.toLowerCase() === 'g' && event.shiftKey) {
+                event.preventDefault();
+                ungroupSelectedLayers();
+
+                return;
+            }
+
+            if (modifier && event.key.toLowerCase() === 'g') {
+                event.preventDefault();
+                groupSelectedLayer();
 
                 return;
             }
@@ -1193,17 +1345,18 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
                                 <div
                                     key={layer.id}
                                     className={`flex items-center gap-2 rounded-md text-sm transition ${
-                                        layer.id === selectedLayerId
+                                        selectedLayerIds.includes(layer.id)
                                             ? 'bg-primary text-primary-foreground'
                                             : 'hover:bg-accent'
                                     }`}
                                 >
                                     <button
                                         type="button"
-                                        onClick={() =>
+                                        onClick={(event) =>
                                             selectLayer(
                                                 layer.id,
                                                 'layers_panel',
+                                                event.shiftKey,
                                             )
                                         }
                                         className="min-w-0 flex-1 px-3 py-2 text-left"
@@ -1301,6 +1454,7 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
                             </Button>
                         </div>
                         <div
+                            ref={canvasViewportRef}
                             className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-8"
                             onPointerDown={() => clearSelection('viewport')}
                             onWheel={handleCanvasWheel}
@@ -1328,9 +1482,15 @@ export default function ProjectEditor({ project }: { project: EditorProject }) {
                                         key={layer.id}
                                         layer={layer}
                                         canvasScale={canvasScale}
-                                        selected={layer.id === selectedLayerId}
-                                        onSelect={() =>
-                                            selectLayer(layer.id, 'canvas')
+                                        selected={selectedLayerIds.includes(
+                                            layer.id,
+                                        )}
+                                        onSelect={(additive) =>
+                                            selectLayer(
+                                                layer.id,
+                                                'canvas',
+                                                additive,
+                                            )
                                         }
                                         onMove={(x, y) =>
                                             updateCompositionDuringInteraction(
@@ -1441,7 +1601,7 @@ function CanvasLayer({
     layer: Layer;
     canvasScale: number;
     selected: boolean;
-    onSelect: () => void;
+    onSelect: (additive: boolean) => void;
     onMove: (x: number, y: number) => void;
     onResize: (transform: Transform) => void;
     onInteractionStart: () => void;
@@ -1455,7 +1615,11 @@ function CanvasLayer({
 
     function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
         event.stopPropagation();
-        onSelect();
+
+        if (!selected || event.shiftKey) {
+            onSelect(event.shiftKey);
+        }
+
         logEditorEvent('canvas.layer.pointer_down', {
             layerId: layer.id,
             locked: layer.locked,
@@ -1512,7 +1676,11 @@ function CanvasLayer({
 
         event.preventDefault();
         event.stopPropagation();
-        onSelect();
+
+        if (!selected) {
+            onSelect(false);
+        }
+
         onInteractionStart();
         logEditorEvent('canvas.layer.resize_start', {
             layerId: layer.id,
@@ -1590,8 +1758,12 @@ function CanvasLayer({
                     className="pointer-events-none w-full leading-none"
                     style={{
                         color: layer.fill,
+                        fontFamily: layer.fontFamily,
                         fontSize: layer.fontSize,
                         fontWeight: layer.fontWeight,
+                        letterSpacing: layer.letterSpacing,
+                        lineHeight: layer.lineHeight,
+                        textAlign: layer.textAlign,
                     }}
                 >
                     {layer.content}
@@ -1599,8 +1771,11 @@ function CanvasLayer({
             )}
             {layer.type === 'rectangle' && (
                 <div
-                    className="pointer-events-none size-full rounded-2xl"
-                    style={{ background: layer.fill }}
+                    className="pointer-events-none size-full"
+                    style={{
+                        background: layer.fill,
+                        borderRadius: layer.cornerRadius ?? 0,
+                    }}
                 />
             )}
             {layer.type === 'ellipse' && (
@@ -1611,8 +1786,11 @@ function CanvasLayer({
             )}
             {layer.type === 'frame' && (
                 <div
-                    className="pointer-events-none size-full rounded-sm border-2 border-sky-500/70"
-                    style={{ background: layer.fill }}
+                    className="pointer-events-none size-full border-2 border-sky-500/70"
+                    style={{
+                        background: layer.fill,
+                        borderRadius: layer.cornerRadius ?? 0,
+                    }}
                 />
             )}
             {layer.type === 'group' && (
@@ -1620,8 +1798,11 @@ function CanvasLayer({
             )}
             {layer.type === 'image' && (
                 <div
-                    className="pointer-events-none flex size-full items-center justify-center overflow-hidden rounded-2xl border-4 border-dashed border-blue-400 bg-blue-50 text-4xl font-semibold text-blue-700"
-                    style={{ background: layer.fill }}
+                    className="pointer-events-none flex size-full items-center justify-center overflow-hidden border-4 border-dashed border-blue-400 bg-blue-50 text-4xl font-semibold text-blue-700"
+                    style={{
+                        background: layer.fill,
+                        borderRadius: layer.cornerRadius ?? 0,
+                    }}
                 >
                     {layer.content ? (
                         <img
@@ -1670,7 +1851,7 @@ function resizeTransform(
     deltaX: number,
     deltaY: number,
 ): Transform {
-    const minSize = 24;
+    const minSize = 1;
     let { x, y, width, height } = transform;
 
     if (handle.includes('e')) {
@@ -1693,10 +1874,10 @@ function resizeTransform(
 
     return {
         ...transform,
-        x,
-        y,
-        width,
-        height,
+        x: roundCanvasNumber(x),
+        y: roundCanvasNumber(y),
+        width: roundCanvasNumber(width),
+        height: roundCanvasNumber(height),
     };
 }
 
@@ -2088,6 +2269,23 @@ const animationPresetGroups: Array<{
     },
 ];
 
+const textAnimationPresetGroups: Array<{
+    phase: AnimationActionPhase;
+    title: string;
+    presets: Array<{ kind: AnimationActionKind; label: string }>;
+}> = [
+    {
+        phase: 'in',
+        title: 'Text',
+        presets: [
+            { kind: 'typewriter', label: 'Typewriter' },
+            { kind: 'drop', label: 'Drop In' },
+            { kind: 'flip', label: 'Flip In' },
+            { kind: 'explode', label: 'Explode' },
+        ],
+    },
+];
+
 function Inspector({
     layer,
     composition,
@@ -2141,6 +2339,10 @@ function Inspector({
     const selectedAction =
         layerActions.find((action) => action.id === selectedActionId) ??
         layerActions[0];
+    const presetGroups =
+        currentLayer.type === 'text'
+            ? [...textAnimationPresetGroups, ...animationPresetGroups]
+            : animationPresetGroups;
 
     return (
         <div className="grid gap-5">
@@ -2245,17 +2447,126 @@ function Inspector({
                 </Field>
 
                 {layer.type === 'text' && (
-                    <Field label="Text">
-                        <Input
-                            value={layer.content ?? ''}
-                            onChange={(event) =>
-                                onLayerChange((item) => ({
-                                    ...item,
-                                    content: event.target.value,
-                                }))
-                            }
-                        />
-                    </Field>
+                    <div className="grid gap-3">
+                        <Field label="Text">
+                            <Input
+                                value={layer.content ?? ''}
+                                onChange={(event) =>
+                                    onLayerChange((item) => ({
+                                        ...item,
+                                        content: event.target.value,
+                                    }))
+                                }
+                            />
+                        </Field>
+                        <div className="grid grid-cols-2 gap-3">
+                            <Field label="Font">
+                                <Input
+                                    value={
+                                        layer.fontFamily ??
+                                        'Inter, Instrument Sans, sans-serif'
+                                    }
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            fontFamily: event.target.value,
+                                        }))
+                                    }
+                                />
+                            </Field>
+                            <Field label="Weight">
+                                <Input
+                                    type="number"
+                                    value={layer.fontWeight ?? 700}
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            fontWeight: numberFromInput(
+                                                event.target.value,
+                                                item.fontWeight ?? 700,
+                                                { min: 100, max: 1000 },
+                                            ),
+                                        }))
+                                    }
+                                />
+                            </Field>
+                            <Field label="Size">
+                                <Input
+                                    type="number"
+                                    value={formatNumberInput(
+                                        layer.fontSize ?? 24,
+                                    )}
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            fontSize: numberFromInput(
+                                                event.target.value,
+                                                item.fontSize ?? 24,
+                                                { min: 1, max: 1000 },
+                                            ),
+                                        }))
+                                    }
+                                />
+                            </Field>
+                            <Field label="Line height">
+                                <Input
+                                    type="number"
+                                    step={0.05}
+                                    value={formatNumberInput(
+                                        layer.lineHeight ?? 1.1,
+                                    )}
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            lineHeight: numberFromInput(
+                                                event.target.value,
+                                                item.lineHeight ?? 1.1,
+                                                { min: 0.1, max: 10 },
+                                            ),
+                                        }))
+                                    }
+                                />
+                            </Field>
+                            <Field label="Letter spacing">
+                                <Input
+                                    type="number"
+                                    step={0.1}
+                                    value={formatNumberInput(
+                                        layer.letterSpacing ?? 0,
+                                    )}
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            letterSpacing: numberFromInput(
+                                                event.target.value,
+                                                item.letterSpacing ?? 0,
+                                                { min: -100, max: 100 },
+                                            ),
+                                        }))
+                                    }
+                                />
+                            </Field>
+                            <Field label="Align">
+                                <select
+                                    value={layer.textAlign ?? 'left'}
+                                    onChange={(event) =>
+                                        onLayerChange((item) => ({
+                                            ...item,
+                                            textAlign: event.target.value as
+                                                | 'left'
+                                                | 'center'
+                                                | 'right',
+                                        }))
+                                    }
+                                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                >
+                                    <option value="left">Left</option>
+                                    <option value="center">Center</option>
+                                    <option value="right">Right</option>
+                                </select>
+                            </Field>
+                        </div>
+                    </div>
                 )}
 
                 {layer.type === 'image' && (
@@ -2289,7 +2600,9 @@ function Inspector({
                                         ? 0.1
                                         : 1
                                 }
-                                value={layer.transform[property] ?? 0}
+                                value={formatNumberInput(
+                                    layer.transform[property] ?? 0,
+                                )}
                                 onChange={(event) =>
                                     onLayerChange((item) => ({
                                         ...item,
@@ -2307,6 +2620,25 @@ function Inspector({
                         </Field>
                     ))}
                 </div>
+
+                {['rectangle', 'frame', 'image'].includes(layer.type) && (
+                    <Field label="Corner radius">
+                        <Input
+                            type="number"
+                            value={formatNumberInput(layer.cornerRadius ?? 0)}
+                            onChange={(event) =>
+                                onLayerChange((item) => ({
+                                    ...item,
+                                    cornerRadius: numberFromInput(
+                                        event.target.value,
+                                        item.cornerRadius ?? 0,
+                                        { min: 0, max: 7680 },
+                                    ),
+                                }))
+                            }
+                        />
+                    </Field>
+                )}
 
                 <ColorField
                     label="Fill"
@@ -2357,7 +2689,7 @@ function Inspector({
                     </span>
                 </div>
                 <div className="grid gap-3">
-                    {animationPresetGroups.map((group) => (
+                    {presetGroups.map((group) => (
                         <div key={group.phase} className="grid gap-2">
                             <div className="text-xs font-medium text-muted-foreground uppercase">
                                 {group.title}
@@ -2535,7 +2867,7 @@ function Inspector({
                                     }
                                     className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                                 >
-                                    {animationPresetGroups.map((group) => (
+                                    {presetGroups.map((group) => (
                                         <option
                                             key={group.phase}
                                             value={group.phase}
@@ -2686,9 +3018,9 @@ function Inspector({
                                                 ? 0.1
                                                 : 1
                                         }
-                                        value={
-                                            selectedAction.delta[property] ?? 0
-                                        }
+                                        value={formatNumberInput(
+                                            selectedAction.delta[property] ?? 0,
+                                        )}
                                         onChange={(event) =>
                                             onActionChange(
                                                 selectedAction.id,
@@ -3127,6 +3459,14 @@ function numberFromInput(
     return clampNumber(parsed, bounds);
 }
 
+function formatNumberInput(value: number): string {
+    return roundCanvasNumber(value).toString();
+}
+
+function roundCanvasNumber(value: number): number {
+    return Number.parseFloat(value.toFixed(2));
+}
+
 function clampCompositionToDuration(
     composition: Composition,
     durationMs: number,
@@ -3178,7 +3518,7 @@ function transformNumberBounds(property: keyof Transform): {
     max?: number;
 } {
     if (property === 'width' || property === 'height') {
-        return { min: 24, max: 7680 };
+        return { min: 1, max: 7680 };
     }
 
     if (property === 'scale') {
